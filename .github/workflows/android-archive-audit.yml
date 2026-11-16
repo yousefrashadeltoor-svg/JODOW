@@ -1,0 +1,248 @@
+name: JODOW Android archive audit and build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - audit/android-build-matrix-2026-11-16
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "Archive ${{ matrix.id }} — ${{ matrix.label }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: "01"
+            archive: "---3 (1).zip"
+            label: "Aurora Get — candidate 01"
+          - id: "02"
+            archive: "---3.zip"
+            label: "Aurora Get — candidate 02"
+          - id: "03"
+            archive: "aurora-get-android-development.zip"
+            label: "Aurora Get — Android development"
+          - id: "04"
+            archive: "aurora-get-app-development (1).zip"
+            label: "Aurora Get — app development 1"
+          - id: "05"
+            archive: "aurora-get-app-development (2).zip"
+            label: "Aurora Get — app development 2"
+          - id: "06"
+            archive: "aurora-get-app-development (3).zip"
+            label: "JoDon — candidate 06"
+          - id: "07"
+            archive: "aurora-get-app-development (4).zip"
+            label: "Aurora Get — candidate 07"
+          - id: "08"
+            archive: "aurora-get-app-development (5).zip"
+            label: "Aurora Get — candidate 08"
+          - id: "09"
+            archive: "aurora-get-app-development.zip"
+            label: "Aurora Get — app development"
+          - id: "10"
+            archive: "jo-dow-android-development.zip"
+            label: "JoDow — Android development"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 SDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Extract and identify the native Android project
+        id: prepare
+        shell: bash
+        env:
+          ARCHIVE: "${{ matrix.archive }}"
+          APP_ID: "${{ matrix.id }}"
+          APP_LABEL: "${{ matrix.label }}"
+        run: |
+          set -euo pipefail
+          mkdir -p "work/${APP_ID}/out"
+          python3 - "${ARCHIVE}" "work/${APP_ID}/source" <<'PY'
+          import os, sys, zipfile
+          archive, destination = sys.argv[1], sys.argv[2]
+          os.makedirs(destination, exist_ok=True)
+          with zipfile.ZipFile(archive) as z:
+              broken = z.testzip()
+              if broken:
+                  raise SystemExit(f"Corrupt ZIP entry: {broken}")
+              base = os.path.realpath(destination)
+              for item in z.infolist():
+                  target = os.path.realpath(os.path.join(destination, item.filename))
+                  if target != base and not target.startswith(base + os.sep):
+                      raise SystemExit(f"Unsafe ZIP path rejected: {item.filename}")
+                  z.extract(item, destination)
+          PY
+
+          root="$(find "work/${APP_ID}/source" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.gradle/*' -print -quit | xargs -r dirname)"
+          if [[ -z "${root}" ]]; then
+            printf '{"id":"%s","label":"%s","status":"NO_NATIVE_GRADLE_PROJECT","detail":"Archive has no Gradle settings file; no APK was fabricated."}\n' "${APP_ID}" "${APP_LABEL}" > "work/${APP_ID}/out/report.json"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! -f "${root}/app/src/main/AndroidManifest.xml" ]]; then
+            printf '{"id":"%s","label":"%s","status":"MISSING_APP_MANIFEST","detail":"Native Gradle project exists, but app module manifest is missing."}\n' "${APP_ID}" "${APP_LABEL}" > "work/${APP_ID}/out/report.json"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          source_count="$(find "${root}/app/src/main" -type f \( -name '*.kt' -o -name '*.java' \) | wc -l | tr -d ' ')"
+          if [[ "${source_count}" == "0" ]]; then
+            printf '{"id":"%s","label":"%s","status":"MISSING_APP_SOURCE","detail":"Manifest exists, but app/src/main contains no Kotlin or Java application code."}\n' "${APP_ID}" "${APP_LABEL}" > "work/${APP_ID}/out/report.json"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "android_root=${root}" >> "$GITHUB_OUTPUT"
+          echo "Detected native project: ${root}"
+          echo "Main app Kotlin/Java source files: ${source_count}"
+
+      - name: Assemble APK and run unit tests
+        id: build
+        if: steps.prepare.outputs.ready == 'true'
+        shell: bash
+        env:
+          ANDROID_ROOT: "${{ steps.prepare.outputs.android_root }}"
+          APP_ID: "${{ matrix.id }}"
+          APP_LABEL: "${{ matrix.label }}"
+        run: |
+          set +e
+          mkdir -p "work/${APP_ID}/out"
+          gradle -p "${ANDROID_ROOT}" --no-daemon --stacktrace :app:assembleDebug > "work/${APP_ID}/out/build.log" 2>&1
+          build_rc=$?
+          test_rc=125
+          if [[ $build_rc -eq 0 ]]; then
+            gradle -p "${ANDROID_ROOT}" --no-daemon --stacktrace :app:testDebugUnitTest >> "work/${APP_ID}/out/build.log" 2>&1
+            test_rc=$?
+          fi
+
+          apk_count=0
+          while IFS= read -r -d '' apk; do
+            apk_count=$((apk_count + 1))
+            cp "$apk" "work/${APP_ID}/out/${APP_ID}-$(basename "$apk")"
+            unzip -t "work/${APP_ID}/out/${APP_ID}-$(basename "$apk")" >/dev/null 2>&1 || true
+          done < <(find "${ANDROID_ROOT}/app/build/outputs/apk" -type f -name '*.apk' -print0 2>/dev/null)
+
+          status="BUILD_FAILED"
+          if [[ $build_rc -eq 0 && $test_rc -eq 0 ]]; then status="BUILD_AND_UNIT_TESTS_PASSED"; fi
+          if [[ $build_rc -eq 0 && $test_rc -ne 0 ]]; then status="APK_BUILT_UNIT_TESTS_FAILED"; fi
+          if [[ $apk_count -gt 0 && $build_rc -ne 0 ]]; then status="APK_PRESENT_BUILD_STEP_FAILED"; fi
+
+          python3 - "${APP_ID}" "${APP_LABEL}" "$status" "$build_rc" "$test_rc" "$apk_count" <<'PY'
+          import json, sys
+          app_id, label, status, build_rc, test_rc, apk_count = sys.argv[1:]
+          report = {
+              "id": app_id,
+              "label": label,
+              "status": status,
+              "assemble_exit_code": int(build_rc),
+              "unit_test_exit_code": int(test_rc),
+              "apk_count": int(apk_count),
+              "apk_generated": int(apk_count) > 0
+          }
+          with open(f"work/{app_id}/out/report.json", "w", encoding="utf-8") as f:
+              json.dump(report, f, ensure_ascii=False, indent=2)
+          PY
+
+          tail -n 100 "work/${APP_ID}/out/build.log"
+          echo "Build report: ${status}; APK files found: ${apk_count}"
+
+      - name: Upload per-archive build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "jodow-${{ matrix.id }}-evidence"
+          path: "work/${{ matrix.id }}/out/"
+          if-no-files-found: warn
+          compression-level: 6
+          retention-days: 30
+
+  package:
+    name: Collect APKs and audit reports
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Download all per-archive evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "jodow-*-evidence"
+          path: evidence
+          merge-multiple: false
+
+      - name: Assemble ordered delivery package
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, shutil, glob, zipfile
+          os.makedirs("delivery/APK", exist_ok=True)
+          os.makedirs("delivery/Reports", exist_ok=True)
+          reports = []
+          for path in sorted(glob.glob("evidence/**/report.json", recursive=True)):
+              with open(path, encoding="utf-8") as f:
+                  report = json.load(f)
+              reports.append(report)
+              app_id = report.get("id", "unknown")
+              with open(f"delivery/Reports/{app_id}-report.json", "w", encoding="utf-8") as f:
+                  json.dump(report, f, ensure_ascii=False, indent=2)
+              for apk in glob.glob(os.path.join(os.path.dirname(path), "*.apk")):
+                  shutil.copy2(apk, f"delivery/APK/{os.path.basename(apk)}")
+              log = os.path.join(os.path.dirname(path), "build.log")
+              if os.path.isfile(log):
+                  shutil.copy2(log, f"delivery/Reports/{app_id}-build.log")
+          reports.sort(key=lambda r: r.get("id", ""))
+          with open("delivery/BUILD-STATUS.json", "w", encoding="utf-8") as f:
+              json.dump(reports, f, ensure_ascii=False, indent=2)
+          with open("delivery/README.txt", "w", encoding="utf-8") as f:
+              f.write("JODOW Android archive build package\n")
+              f.write("APK files are included only when an actual native build produced them.\n")
+              f.write("Read BUILD-STATUS.json and Reports before installing.\n\n")
+              for r in reports:
+                  f.write(f"{r.get('id')} — {r.get('label')}: {r.get('status')}\n")
+          with zipfile.ZipFile("JODOW-Android-APKs-and-Reports.zip", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for root, _, files in os.walk("delivery"):
+                  for name in files:
+                      p = os.path.join(root, name)
+                      z.write(p, os.path.relpath(p, "delivery"))
+          print("Ordered reports:")
+          for r in reports:
+              print(r.get("id"), r.get("status"), "APK:", r.get("apk_generated", False))
+          print("APK count:", len(glob.glob("delivery/APK/*.apk")))
+          PY
+
+      - name: Upload ordered delivery package
+        uses: actions/upload-artifact@v4
+        with:
+          name: JODOW-Android-APKs-and-Reports
+          path: |
+            JODOW-Android-APKs-and-Reports.zip
+            delivery/
+          compression-level: 9
+          retention-days: 30
