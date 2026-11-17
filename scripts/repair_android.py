@@ -13,6 +13,8 @@ def desired_for(group: str, name: str):
     module = f'{group}:{name}'
     if module in ('com.composables:composeunstyled', 'com.composables:core'):
         return module, '1.49.9'
+    if module == 'sh.calvin.reorderable:reorderable':
+        return module, '2.5.1'
     if module == 'com.google.android.gms:play-services-cronet':
         return module, '18.1.1'
     if module in ('org.chromium.net:cronet-okhttp', 'com.google.net.cronet:cronet-okhttp'):
@@ -122,6 +124,7 @@ for path in root.rglob('*'):
             'com.composables:composeunstyled:1.20.0': 'com.composables:composeunstyled:1.49.9',
             'com.composables:core:1.19.3': 'com.composables:core:1.49.9',
             'com.google.android.gms:play-services-cronet:119.6045.31': 'com.google.android.gms:play-services-cronet:18.1.1',
+            'sh.calvin.reorderable:reorderable:2.4.4': 'sh.calvin.reorderable:reorderable:2.5.1',
             'org.chromium.net:cronet-okhttp:131.0.6778.108': 'com.google.net.cronet:cronet-okhttp:0.1.1',
             'com.github.yausername.youtubedl-android': 'io.github.junkfood02.youtubedl-android',
         }
