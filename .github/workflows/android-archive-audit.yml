@@ -104,9 +104,9 @@ jobs:
       - name: Repair known malformed Gradle metadata in extracted copy
         shell: bash
         env:
-          APP_ID: "\${{ matrix.id }}"
+          APP_ID: "${{ matrix.id }}"
         run: |
-          python3 - "work/\${APP_ID}/source" "work/\${APP_ID}/out/repairs.txt" <<'PY'
+          python3 - "work/${APP_ID}/source" "work/${APP_ID}/out/repairs.txt" <<'PY'
           import pathlib, re, sys
           root = pathlib.Path(sys.argv[1])
           log_path = pathlib.Path(sys.argv[2])
