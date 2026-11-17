@@ -9,108 +9,146 @@ root = Path(sys.argv[1]).resolve()
 report = Path(sys.argv[2]) if len(sys.argv) > 2 else root / 'repair-report.txt'
 changes = []
 
-coordinate_replacements = {
-    'com.composables:composeunstyled:1.20.1': 'com.composables:composeunstyled:1.49.9',
-    'com.composables:composeunstyled:1.20.0': 'com.composables:composeunstyled:1.49.9',
-    'com.composables:core:1.19.3': 'com.composables:core:1.49.9',
-    'com.google.android.gms:play-services-cronet:119.6045.31': 'com.google.android.gms:play-services-cronet:18.1.1',
-    'org.chromium.net:cronet-okhttp:131.0.6778.108': 'com.google.net.cronet:cronet-okhttp:0.1.1',
-}
-catalog_versions = {
-    'com.composables:composeunstyled': '1.49.9',
-    'com.composables:core': '1.49.9',
-    'com.google.android.gms:play-services-cronet': '18.1.1',
-    'com.google.net.cronet:cronet-okhttp': '0.1.1',
-}
-coordinate_modules = {
-    'org.chromium.net:cronet-okhttp': 'com.google.net.cronet:cronet-okhttp',
-}
+def desired_for(group: str, name: str):
+    module = f'{group}:{name}'
+    if module in ('com.composables:composeunstyled', 'com.composables:core'):
+        return module, '1.49.9'
+    if module == 'com.google.android.gms:play-services-cronet':
+        return module, '18.1.1'
+    if module in ('org.chromium.net:cronet-okhttp', 'com.google.net.cronet:cronet-okhttp'):
+        return 'com.google.net.cronet:cronet-okhttp', '0.1.1'
+    if name in ('library', 'ffmpeg', 'aria2c') and group in ('com.github.yausername.youtubedl-android', 'io.github.junkfood02.youtubedl-android'):
+        return f'io.github.junkfood02.youtubedl-android:{name}', '0.18.1'
+    return None
 
-def repair_catalog(path: Path, content: str) -> str:
-    lines = content.splitlines()
+def repair_toml(path: Path, text: str) -> str:
+    lines = text.splitlines()
     section = ''
-    alias_versions = {}
+    aliases = {}
+    seen = {}
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('[') and stripped.endswith(']'):
             section = stripped
+            seen = {}
             continue
-        if section != '[libraries]' or 'module = ' not in line:
-            continue
-        module_part = line.split('module = ', 1)[1]
-        if not module_part.startswith('"'):
-            continue
-        module = module_part.split('"', 2)[1]
-        if module in coordinate_modules:
-            lines[i] = line.replace(module, coordinate_modules[module])
-            line = lines[i]
-            module = coordinate_modules[module]
-            changes.append(f'{path.relative_to(root)}: changed Cronet OkHttp module coordinate')
-        if module not in catalog_versions:
-            continue
-        desired = catalog_versions[module]
-        if 'version.ref = ' in line:
-            ref_part = line.split('version.ref = ', 1)[1]
-            if ref_part.startswith('"'):
-                alias_versions[ref_part.split('"', 2)[1]] = desired
-        elif 'version = ' in line:
-            before, after = line.split('version = ', 1)
-            if after.startswith('"'):
-                old = after.split('"', 2)[1]
-                lines[i] = before + 'version = "' + desired + '"' + after.split('"', 2)[2]
-                changes.append(f'{path.relative_to(root)}: updated {module} from {old} to {desired}')
+        if section == '[libraries]':
+            key_match = re.match(r'^\s*([A-Za-z0-9_.-]+)\s*=', line)
+            if not key_match:
+                continue
+            key = key_match.group(1)
+            body = line.split('=', 1)[1]
+            module_match = re.search(r'module\s*=\s*"([^"]+)"', body)
+            group_match = re.search(r'group\s*=\s*"([^"]+)"', body)
+            name_match = re.search(r'name\s*=\s*"([^"]+)"', body)
+            module = module_match.group(1) if module_match else None
+            if module and ':' in module:
+                group, name = module.split(':', 1)
+            elif group_match and name_match:
+                group, name = group_match.group(1), name_match.group(1)
+            else:
+                continue
+            wanted = desired_for(group, name)
+            if not wanted:
+                continue
+            new_module, version = wanted
+            ref_match = re.search(r'version\.ref\s*=\s*"([^"]+)"', body)
+            inline_version = re.search(r'version\s*=\s*"([^"]+)"', body)
+            if ref_match:
+                aliases[ref_match.group(1)] = version
+            elif inline_version:
+                body = body.replace('version = "' + inline_version.group(1) + '"', 'version = "' + version + '"')
+            if module_match:
+                body = body.replace('module = "' + module + '"', 'module = "' + new_module + '"')
+            else:
+                body = body.replace('group = "' + group + '"', 'group = "' + new_module.split(':', 1)[0] + '"')
+            lines[i] = line.split('=', 1)[0] + '=' + body
+            changes.append(f'{path.relative_to(root)}: repaired {group}:{name} coordinate/version')
+        elif section == '[plugins]':
+            if 'com.android.application' in line or 'com.android.library' in line:
+                ref_match = re.search(r'version\.ref\s*=\s*"([^"]+)"', line)
+                if ref_match:
+                    aliases[ref_match.group(1)] = '8.9.1'
+                else:
+                    version_match = re.search(r'version\s*=\s*"([0-9.]+)"', line)
+                    if version_match:
+                        line = line[:version_match.start(1)] + '8.9.1' + line[version_match.end(1):]
+                        lines[i] = line
+                        changes.append(f'{path.relative_to(root)}: raised Android Gradle Plugin to 8.9.1')
     section = ''
+    seen = {}
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('[') and stripped.endswith(']'):
             section = stripped
+            seen = {}
             continue
-        if section == '[versions]' and ' = ' in line:
-            key = line.split(' = ', 1)[0].strip()
-            if key in alias_versions and '"' in line:
-                lines[i] = key + ' = "' + alias_versions[key] + '"'
-                changes.append(f'{path.relative_to(root)}: updated catalog alias {key} to {alias_versions[key]}')
-    return '\n'.join(lines) + ('\n' if content.endswith('\n') else '')
+        if section == '[versions]':
+            match = re.match(r'^\s*([A-Za-z0-9_.-]+)\s*=\s*"([^"]+)"', line)
+            if match:
+                key, value = match.group(1), match.group(2)
+                if key in aliases:
+                    wanted = aliases[key]
+                    lines[i] = line[:match.start(2)] + wanted + line[match.end(2):]
+                    changes.append(f'{path.relative_to(root)}: updated catalog alias {key} to {wanted}')
+                elif key.lower().replace('_', '-').replace('.', '-') in ('agp', 'android-gradle-plugin', 'android-gradle') and value != '8.9.1':
+                    lines[i] = line[:match.start(2)] + '8.9.1' + line[match.end(2):]
+                    changes.append(f'{path.relative_to(root)}: raised Android Gradle Plugin alias {key} to 8.9.1')
+                elif key.lower().replace('_', '').replace('-', '') in ('compilesdk', 'compilesdkversion', 'androidcompilesdk') and value != '36':
+                    lines[i] = line[:match.start(2)] + '36' + line[match.end(2):]
+                    changes.append(f'{path.relative_to(root)}: updated {key} to Android API 36')
+        if section in ('[versions]', '[libraries]', '[plugins]'):
+            key_match = re.match(r'^\s*([A-Za-z0-9_.-]+)\s*=', line)
+            if key_match:
+                key = key_match.group(1)
+                if key in seen:
+                    lines[seen[key]] = None
+                    changes.append(f'{path.relative_to(root)}: removed duplicate TOML key {key}')
+                seen[key] = i
+    return '\n'.join(line for line in lines if line is not None) + ('\n' if text.endswith('\n') else '')
 
 for path in root.rglob('*'):
     if not path.is_file() or any(part in ('.gradle', 'build') for part in path.parts):
         continue
-    if path.suffix in ('.toml', '.gradle', '.kts', '.properties'):
-        original = path.read_text(errors='ignore')
-        updated = original
-        for old, new in coordinate_replacements.items():
+    if path.suffix not in ('.toml', '.gradle', '.kts', '.properties'):
+        continue
+    original = path.read_text(errors='ignore')
+    updated = original
+    if path.suffix == '.toml':
+        updated = repair_toml(path, updated)
+    else:
+        replacements = {
+            'com.composables:composeunstyled:1.20.1': 'com.composables:composeunstyled:1.49.9',
+            'com.composables:composeunstyled:1.20.0': 'com.composables:composeunstyled:1.49.9',
+            'com.composables:core:1.19.3': 'com.composables:core:1.49.9',
+            'com.google.android.gms:play-services-cronet:119.6045.31': 'com.google.android.gms:play-services-cronet:18.1.1',
+            'org.chromium.net:cronet-okhttp:131.0.6778.108': 'com.google.net.cronet:cronet-okhttp:0.1.1',
+            'com.github.yausername.youtubedl-android': 'io.github.junkfood02.youtubedl-android',
+        }
+        for old, new in replacements.items():
             updated = updated.replace(old, new)
-        if path.suffix == '.toml':
-            updated = repair_catalog(path, updated)
-        if path.suffix in ('.gradle', '.kts'):
-            updated = updated.replace(
-                'libs.androidx.compose.ui.googlefonts.let { libs.androidx.compose.ui.text.googlefonts }',
-                'libs.androidx.compose.ui.text.googlefonts'
-            )
-            manifest = path.parent / 'src/main/AndroidManifest.xml'
-            has_hilt = ('com.google.dagger.hilt.android' in updated or 'libs.plugins.hilt' in updated)
-            if manifest.is_file() and has_hilt and 'hilt-android' not in updated and 'dependencies {' in updated:
-                updated = updated.replace(
-                    'dependencies {',
-                    'dependencies {\n    implementation("com.google.dagger:hilt-android:2.57.1")',
-                    1
-                )
-                changes.append(f'{path.relative_to(root)}: added missing Hilt Android runtime dependency')
-        if path.suffix in ('.gradle', '.kts', '.properties') and updated != original:
-            path.write_text(updated)
-            changes.append(f'{path.relative_to(root)}: corrected dependency metadata')
-        elif path.suffix == '.toml' and updated != original:
-            path.write_text(updated)
-            changes.append(f'{path.relative_to(root)}: corrected version catalog metadata')
+        updated = re.sub(r'(io\.github\.junkfood02\.youtubedl-android:(?:library|ffmpeg|aria2c):)0\.16\.1', r'\g<1>0.18.1', updated)
+        updated = re.sub(r'(compileSdk(?:Version)?\s*(?:=\s*)?)(?:[0-9]+)', r'\g<1>36', updated)
+        updated = re.sub(r'(compileSdkVersion\s*\(\s*)([0-9]+)(\s*\))', r'\g<1>36\g<3>', updated)
+        updated = re.sub(r'(id\s*\(?\s*["\']com\.android\.(?:application|library)["\']\s*\)?\s+version\s+["\'])[0-9.]+(["\'])', r'\g<1>8.9.1\g<2>', updated)
+        updated = updated.replace('com.android.tools.build:gradle:8.8.0', 'com.android.tools.build:gradle:8.9.1')
+        updated = updated.replace('com.android.tools.build:gradle:8.8.1', 'com.android.tools.build:gradle:8.9.1')
+        updated = updated.replace('com.android.tools.build:gradle:8.9.0', 'com.android.tools.build:gradle:8.9.1')
+        updated = updated.replace('libs.androidx.compose.ui.googlefonts.let { libs.androidx.compose.ui.text.googlefonts }', 'libs.androidx.compose.ui.text.googlefonts')
+        manifest = path.parent / 'src/main/AndroidManifest.xml'
+        has_hilt = ('com.google.dagger.hilt.android' in updated or 'libs.plugins.hilt' in updated)
+        if manifest.is_file() and has_hilt and 'hilt-android' not in updated and 'dependencies {' in updated:
+            updated = updated.replace('dependencies {', 'dependencies {\n    implementation("com.google.dagger:hilt-android:2.57.1")', 1)
+            changes.append(f'{path.relative_to(root)}: added missing Hilt Android runtime dependency')
+    if updated != original:
+        path.write_text(updated)
+        changes.append(f'{path.relative_to(root)}: repaired Android build metadata')
 
 for path in root.rglob('*.kt'):
     if any(part in ('.gradle', 'build') for part in path.parts):
         continue
     original = path.read_text(errors='ignore')
-    updated = original.replace(
-        'org.chromium.net.okhttp.CronetInterceptor',
-        'com.google.net.cronet.okhttptransport.CronetInterceptor'
-    )
+    updated = original.replace('org.chromium.net.okhttp.CronetInterceptor', 'com.google.net.cronet.okhttptransport.CronetInterceptor')
     if updated != original:
         path.write_text(updated)
         changes.append(f'{path.relative_to(root)}: corrected Cronet OkHttp import package')
@@ -142,5 +180,5 @@ for shortcuts in root.rglob('shortcuts.xml'):
         changes.append(f'{shortcuts.relative_to(root)}: moved {len(generated)} shortcut labels into string resources')
 
 report.parent.mkdir(parents=True, exist_ok=True)
-report.write_text('\n'.join(changes) + ('\n' if changes else 'No known build repairs were needed.\n'))
+report.write_text('\n'.join(sorted(set(changes))) + ('\n' if changes else 'No known build repairs were needed.\n'))
 print(report.read_text())
