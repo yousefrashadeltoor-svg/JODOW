@@ -13,6 +13,8 @@ def desired_for(group: str, name: str):
     module = f'{group}:{name}'
     if module in ('com.composables:composeunstyled', 'com.composables:core'):
         return module, '1.49.9'
+    if module == 'dev.chrisbanes.haze:haze':
+        return module, '1.7.3'
     if module == 'sh.calvin.reorderable:reorderable':
         return module, '2.5.1'
     if module == 'com.google.android.gms:play-services-cronet':
@@ -191,6 +193,12 @@ for source_file in root.rglob('*.kt'):
         continue
     original = source_file.read_text(errors='ignore')
     updated = original
+    if source_file.name == 'AuroraResult.kt':
+        updated = updated.replace('inline fun <R> map(', 'fun <R> map(')
+        updated = updated.replace('inline fun onSuccess(', 'fun onSuccess(')
+        updated = updated.replace('inline fun onFailure(', 'fun onFailure(')
+        if updated != original:
+            changes.append(f'{source_file.relative_to(root)}: removed invalid inline modifiers from interface members')
     if source_file.name == 'DownloadRepository.kt':
         updated = updated.replace(
             'import com.auroraget.app.engine.SizeProbe',
@@ -309,6 +317,7 @@ snippets = {
     'AuroraResult.kt': [(1, 90)],
     'PlayerScreen.kt': [(1, 80), (180, 235)],
     'AuroraGlassComponents.kt': [(85, 115)],
+    'SegmentedDownloadEngine.kt': [(185, 215), (260, 285), (390, 430)],
     'AuroraGlassComponents.kt': [(1, 145)],
     'DownloadRepository.kt': [(1, 45), (165, 215)],
     'NetworkAndExtractors.kt': [(1, 115)],
