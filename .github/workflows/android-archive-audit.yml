@@ -315,13 +315,13 @@ jobs:
           for module in "${module_list[@]}"; do
             task="${module}:assembleDebug"
             echo "=== Building ${task} ===" | tee -a "work/${APP_ID}/out/build.log"
-            gradle -p "${ANDROID_ROOT}" --no-daemon --stacktrace "${task}" >> "work/${APP_ID}/out/build.log" 2>&1
+            gradle -p "${ANDROID_ROOT}" --no-daemon --no-configuration-cache --stacktrace "${task}" >> "work/${APP_ID}/out/build.log" 2>&1
             rc=$?
             if [[ $rc -ne 0 ]]; then build_rc=$rc; fi
             if [[ $rc -eq 0 ]]; then
               test_task="${module}:testDebugUnitTest"
               echo "=== Testing ${test_task} ===" | tee -a "work/${APP_ID}/out/build.log"
-              gradle -p "${ANDROID_ROOT}" --no-daemon --stacktrace "${test_task}" >> "work/${APP_ID}/out/build.log" 2>&1
+              gradle -p "${ANDROID_ROOT}" --no-daemon --no-configuration-cache --stacktrace "${test_task}" >> "work/${APP_ID}/out/build.log" 2>&1
               trc=$?
               if [[ $trc -ne 0 ]]; then test_rc=$trc; fi
             else
