@@ -101,6 +101,58 @@ jobs:
                   z.extract(item, dest)
           PY
 
+      - name: Repair known malformed Gradle metadata in extracted copy
+        shell: bash
+        env:
+          APP_ID: "\${{ matrix.id }}"
+        run: |
+          python3 - "work/\${APP_ID}/source" "work/\${APP_ID}/out/repairs.txt" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          log_path = pathlib.Path(sys.argv[2])
+          repairs = []
+          gradle_pattern = re.compile(r'(\bid\s*(?:\(\s*)?["\'])com\.google\.dagger:hilt-android-gradle-plugin(["\']\s*\)?)')
+          toml_plugin_pattern = re.compile(r'(id\s*=\s*["\'])com\.google\.dagger:hilt-android-gradle-plugin(["\'])')
+          for p in root.rglob("*"):
+              if not p.is_file() or any(x in p.parts for x in (".gradle", "build")):
+                  continue
+              if p.name.endswith((".gradle", ".gradle.kts")):
+                  old = p.read_text(errors="ignore")
+                  new, n = gradle_pattern.subn(r'\1com.google.dagger.hilt.android\2', old)
+                  if n:
+                      p.write_text(new)
+                      repairs.append(f"{p.relative_to(root)}: corrected invalid Hilt plugin id ({n})")
+              elif p.suffix == ".toml":
+                  lines = p.read_text(errors="ignore").splitlines()
+                  seen, changed, section = {}, False, ""
+                  for i, line in enumerate(lines):
+                      stripped = line.strip()
+                      if stripped.startswith("[") and stripped.endswith("]"):
+                          section = stripped
+                          seen = {}
+                          continue
+                      if section == "[plugins]":
+                          patched = toml_plugin_pattern.sub(r'\1com.google.dagger.hilt.android\2', line)
+                          if patched != line:
+                              lines[i] = patched
+                              line = patched
+                              changed = True
+                              repairs.append(f"{p.relative_to(root)}: corrected Hilt plugin id in [plugins]")
+                      m = re.match(r"^\s*([A-Za-z0-9_-]+)\s*=", line)
+                      if m:
+                          key = m.group(1)
+                          if key in seen:
+                              old_index = seen[key]
+                              repairs.append(f"{p.relative_to(root)}: removed duplicate TOML key '{key}' (kept later definition)")
+                              lines[old_index] = None
+                              changed = True
+                          seen[key] = i
+                  if changed:
+                      p.write_text("\n".join(x for x in lines if x is not None) + "\n")
+          log_path.write_text("\n".join(repairs) + ("\n" if repairs else "No metadata repairs were necessary.\n"))
+          print(log_path.read_text())
+          PY
+
           python3 - "${APP_ID}" "${APP_LABEL}" "work/${APP_ID}/source" "work/${APP_ID}/out/report.json" "$GITHUB_OUTPUT" <<'PY'
           import json, os, pathlib, re, sys
           app_id, label, source, report_path, output_path = sys.argv[1:]
