@@ -211,48 +211,75 @@ for shortcuts in root.rglob('shortcuts.xml'):
         values_file.write_text('\n'.join(values) + '\n')
         changes.append(f'{shortcuts.relative_to(root)}: moved {len(generated)} shortcut labels into string resources')
 
-# Emit targeted source snippets for remaining compile failures; never modify UI while inspecting.
+# Emit bounded source and Gradle configuration diagnostics for unresolved compile/build errors.
 diagnostic = []
+gradle_roots = []
+for settings in list(root.rglob('settings.gradle')) + list(root.rglob('settings.gradle.kts')):
+    if any(part in ('.gradle', 'build') for part in settings.parts):
+        continue
+    gradle_roots.append(settings.parent)
+    diagnostic.append(f'--- SETTINGS {settings.relative_to(root)} ---')
+    diagnostic.extend(f'{i}: {line}' for i, line in enumerate(settings.read_text(errors='ignore').splitlines(), 1) if i <= 180)
+
+for gradle_root in gradle_roots[:3]:
+    for rel in ('build.gradle', 'build.gradle.kts', 'gradle/libs.versions.toml'):
+        candidate = gradle_root / rel
+        if candidate.is_file():
+            diagnostic.append(f'--- GRADLE FILE {candidate.relative_to(root)} ---')
+            diagnostic.extend(f'{i}: {line}' for i, line in enumerate(candidate.read_text(errors='ignore').splitlines(), 1) if i <= 180)
+    common_dir = gradle_root / 'core' / 'common'
+    if common_dir.exists():
+        diagnostic.append(f'--- MODULE core/common DIRECTORY {common_dir.relative_to(root)} ---')
+        entries = sorted(common_dir.rglob('*'))
+        diagnostic.extend(str(p.relative_to(root)) for p in entries[:100] if p.is_file())
+        for build_file in (common_dir / 'build.gradle', common_dir / 'build.gradle.kts'):
+            if build_file.is_file():
+                diagnostic.append(f'--- CORE COMMON BUILD {build_file.relative_to(root)} ---')
+                diagnostic.extend(f'{i}: {line}' for i, line in enumerate(build_file.read_text(errors='ignore').splitlines(), 1) if i <= 180)
+
 snippets = {
     'AuroraGlassComponents.kt': [(1, 145)],
-    'DownloadRepository.kt': [(1, 42), (165, 205)],
-    'NetworkAndExtractors.kt': [(1, 105)],
-    'Glass.kt': [(245, 280)],
-    'BrowserScreen.kt': [(1, 45), (150, 175), (245, 280)],
+    'DownloadRepository.kt': [(1, 45), (165, 215)],
+    'NetworkAndExtractors.kt': [(1, 115)],
+    'Glass.kt': [(245, 285)],
+    'BrowserScreen.kt': [(1, 50), (150, 185), (245, 285)],
 }
 for filename, ranges in snippets.items():
-    matches = [p for p in root.rglob(filename) if p.is_file() and 'build' not in p.parts]
-    for path in matches[:2]:
-        source_lines = path.read_text(errors='ignore').splitlines()
-        diagnostic.append(f'--- SOURCE {path.relative_to(root)} ---')
+    matches = [p for p in root.rglob(filename) if p.is_file() and not any(part in ('.gradle', 'build') for part in p.parts)]
+    for source_file in matches[:2]:
+        source_lines = source_file.read_text(errors='ignore').splitlines()
+        diagnostic.append(f'--- SOURCE {source_file.relative_to(root)} ---')
         for first, last in ranges:
             diagnostic.append(f'-- lines {first}-{last} --')
             diagnostic.extend(f'{number}: {line}' for number, line in enumerate(source_lines, 1) if first <= number <= min(last, len(source_lines)))
+
 for symbol in ('SizeProbe', 'headerFor', 'ScreenHeader', 'hazeEffect', 'HazeStyle'):
     occurrences = []
-    for path in root.rglob('*.kt'):
-        if any(part in ('.gradle', 'build') for part in path.parts):
+    for source_file in root.rglob('*.kt'):
+        if any(part in ('.gradle', 'build') for part in source_file.parts):
             continue
         try:
-            for number, line in enumerate(path.read_text(errors='ignore').splitlines(), 1):
-                if symbol in line:
-                    occurrences.append(f'{path.relative_to(root)}:{number}: {line.strip()}')
+            source_lines = source_file.read_text(errors='ignore').splitlines()
         except OSError:
-            pass
+            continue
+        for number, line in enumerate(source_lines, 1):
+            if symbol in line:
+                occurrences.append(f'{source_file.relative_to(root)}:{number}: {line.strip()}')
     diagnostic.append(f'--- SYMBOL {symbol} ---')
-    diagnostic.extend(occurrences[:40] or ['NO MATCH'])
+    diagnostic.extend(occurrences[:60] or ['NO MATCH'])
+
 for catalog in root.rglob('*.toml'):
-    if 'version' not in catalog.name.lower() and 'versions' not in catalog.name.lower():
-        continue
-    matches = [(i, line) for i, line in enumerate(catalog.read_text(errors='ignore').splitlines(), 1) if any(k in line.lower() for k in ('haze', 'composeunstyled', 'cronet', 'youtubedl', 'media3'))]
+    matches = [(i, line) for i, line in enumerate(catalog.read_text(errors='ignore').splitlines(), 1)
+               if any(k in line.lower() for k in ('haze', 'composeunstyled', 'cronet', 'youtubedl', 'media3', 'reorderable', 'hilt'))]
     if matches:
         diagnostic.append(f'--- CATALOG {catalog.relative_to(root)} ---')
-        diagnostic.extend(f'{i}: {line}' for i, line in matches[:100])
+        diagnostic.extend(f'{i}: {line}' for i, line in matches[:120])
+
 if diagnostic:
     changes.append('SOURCE DIAGNOSTICS START')
     changes.extend(diagnostic)
     changes.append('SOURCE DIAGNOSTICS END')
 
 report.parent.mkdir(parents=True, exist_ok=True)
-report.write_text('\n'.join(sorted(set(changes))) + ('\n' if changes else 'No known build repairs were needed.\n'))
+report.write_text('\n'.join(changes) + ('\n' if changes else 'No known build repairs were needed.\n'))
 print(report.read_text())
