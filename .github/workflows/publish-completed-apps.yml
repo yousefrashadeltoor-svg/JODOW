@@ -1,0 +1,48 @@
+name: Publish completed Android APKs
+
+on:
+  push:
+    branches:
+      - audit/android-build-matrix-2026-11-16
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-app-07:
+    name: Publish validated App 07 APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download validated App 07 build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jodow-07-evidence
+          path: evidence
+          run-id: 43993901264
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate and publish standalone APK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          apk="$(find evidence -type f -name '*.apk' -print -quit)"
+          if [[ -z "${apk}" ]]; then
+            echo "No APK found in the validated App 07 artifact."
+            exit 1
+          fi
+          mkdir -p release
+          cp "${apk}" release/JODOW-App-07.apk
+          unzip -t release/JODOW-App-07.apk >/dev/null
+          tag="jodow-app-07-20261117"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" release/JODOW-App-07.apk --clobber
+          else
+            gh release create "${tag}" release/JODOW-App-07.apk \
+              --title "JODOW App 07 — Validated APK" \
+              --notes "Built from archive 07. Build, unit tests, ZIP integrity, APK signature verification and Android package metadata validation passed in GitHub Actions run 43993901264."
+          fi
