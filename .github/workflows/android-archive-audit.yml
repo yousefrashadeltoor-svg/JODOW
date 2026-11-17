@@ -287,6 +287,13 @@ jobs:
           print(json.dumps(report, indent=2))
           PY
 
+      - name: Apply additional archive repairs
+        if: steps.prepare.outputs.ready == 'true'
+        shell: bash
+        env:
+          APP_ID: "${{ matrix.id }}"
+        run: |
+          python3 scripts/repair_android.py "work/${APP_ID}/source" "work/${APP_ID}/out/repairs-extra.txt"
       - name: Assemble detected Android application modules and run unit tests
         id: build
         if: steps.prepare.outputs.ready == 'true'
@@ -356,7 +363,8 @@ jobs:
           with open(f"work/{app_id}/out/report.json", "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
           PY
-          tail -n 120 "work/${APP_ID}/out/build.log"
+          tail -n 240 "work/${APP_ID}/out/build.log"
+          grep -n -E "e: |error:|Unresolved reference:|Type mismatch:|Cannot infer|Overload resolution ambiguity" "work/${APP_ID}/out/build.log" | tail -n 100 || true
           echo "Final status: ${status}; APK files: ${apk_count}; verified: ${verified_count}"
 
       - name: Upload per-archive build evidence
