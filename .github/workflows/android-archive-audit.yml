@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --install "platform-tools" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0"
 
       - name: Extract and identify native Android modules
         id: prepare
@@ -333,8 +333,8 @@ jobs:
             apk_count=$((apk_count + 1))
             dest="work/${APP_ID}/out/${APP_ID}-$(basename "$apk")"
             cp "$apk" "$dest"
-            if unzip -t "$dest" >/dev/null 2>&1 && "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$dest" >> "work/${APP_ID}/out/validation.log" 2>&1; then
-              if "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$dest" >> "work/${APP_ID}/out/validation.log" 2>&1; then
+            if unzip -t "$dest" >/dev/null 2>&1 && "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$dest" >> "work/${APP_ID}/out/validation.log" 2>&1; then
+              if "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$dest" >> "work/${APP_ID}/out/validation.log" 2>&1; then
                 verified_count=$((verified_count + 1))
               fi
             fi
