@@ -185,6 +185,58 @@ for path in root.rglob('*.xml'):
     if updated != original:
         path.write_text(updated)
         changes.append(f'{path.relative_to(root)}: corrected AndroidX SplashScreen postSplashScreenTheme namespace')
+# Repair confirmed Aurora Get source API mismatches in the extracted copy.
+for source_file in root.rglob('*.kt'):
+    if any(part in ('.gradle', 'build') for part in source_file.parts):
+        continue
+    original = source_file.read_text(errors='ignore')
+    updated = original
+    if source_file.name == 'DownloadRepository.kt':
+        updated = updated.replace(
+            'import com.auroraget.app.engine.SizeProbe',
+            'import com.auroraget.app.data.SizeProbe'
+        )
+        updated = updated.replace(
+            'streamSingle(entity, file) { written, speed ->',
+            'streamSingle(entity, file) { written, speed, connections ->'
+        )
+        updated = updated.replace(
+            'publish(entity, written, total, speed, 1, DownloadStatus.DOWNLOADING)',
+            'publish(entity, written, total, speed, connections, DownloadStatus.DOWNLOADING)'
+        )
+    elif source_file.name == 'NetworkAndExtractors.kt':
+        updated = updated.replace(
+            'val cookie = cookies.headerFor(HttpUrl.get(url))',
+            'val cookie = cookies.loadForRequest(url.toHttpUrlOrNull() ?: return builder)\n            .joinToString("; ") { "\${it.name}=\${it.value}" }'
+        )
+    elif source_file.name == 'BrowserScreen.kt':
+        if 'import com.auroraget.app.ui.components.ScreenHeader' not in updated:
+            anchor = 'import com.auroraget.app.ui.components.AuroraTag'
+            if anchor in updated:
+                updated = updated.replace(anchor, anchor + '\nimport com.auroraget.app.ui.components.ScreenHeader', 1)
+            else:
+                updated = updated.replace(
+                    'import com.auroraget.app.ui.components.AuroraSheet',
+                    'import com.auroraget.app.ui.components.AuroraSheet\nimport com.auroraget.app.ui.components.ScreenHeader',
+                    1
+                )
+        updated = updated.replace(
+            'AuroraIconButton("↻") { webView?.reload() }',
+            'AuroraIconButton("↻", onClick = { webView?.reload(); Unit })'
+        )
+        updated = updated.replace(
+            'AuroraIconButton("⌂") { current = "https://www.youtube.com"; webView?.loadUrl(current) }',
+            'AuroraIconButton("⌂", onClick = { current = "https://www.youtube.com"; webView?.loadUrl(current); Unit })'
+        )
+    elif source_file.name == 'Glass.kt':
+        updated = updated.replace(
+            'style.copy(brush = brush, color = c.textPrimary)',
+            'style.copy(brush = brush)'
+        )
+    if updated != original:
+        source_file.write_text(updated)
+        changes.append(f'{source_file.relative_to(root)}: repaired confirmed Compose/download/browser API mismatches')
+
 label_pattern = re.compile(r'((?:android:)?shortcut(?:Short|Long)Label\s*=\s*")([^"]+)(")')
 for shortcuts in root.rglob('shortcuts.xml'):
     if any(part in ('.gradle', 'build') for part in shortcuts.parts):
