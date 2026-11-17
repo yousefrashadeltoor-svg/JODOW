@@ -142,24 +142,25 @@ for path in root.rglob('*'):
             for catalog in root.rglob('*.toml'):
                 for catalog_line in catalog.read_text(errors='ignore').splitlines():
                     if 'hilt' in catalog_line.lower():
-                        version_match = re.search(r'\"(2\\.\\d+\\.\\d+)\"', catalog_line)
+                        version_match = re.search(r'"(2\.\d+\.\d+)"', catalog_line)
                         if version_match:
                             hilt_version = version_match.group(1)
-            if 'hilt-android' not in updated and 'dependencies {' in updated:
+            has_runtime = ('hilt-android' in updated or re.search(r'hilt[._]android', updated))
+            if not has_runtime and 'dependencies {' in updated:
                 updated = updated.replace('dependencies {', 'dependencies {\n    implementation("com.google.dagger:hilt-android:' + hilt_version + '")', 1)
                 changes.append(f'{path.relative_to(root)}: added missing Hilt Android runtime dependency {hilt_version}')
-            has_compiler = bool(re.search(r'(?:kapt|ksp)\\s*\\([^\\n]*hilt-compiler|(?:kapt|ksp)\\s+[^\\n]*hilt-compiler|hilt\\.compiler', updated))
-            if not has_compiler and 'dependencies {' in updated:
-                processor = 'ksp' if re.search(r'\\bksp\\b', updated) else 'kapt'
-                if processor == 'kapt' and not re.search(r'\\bkapt\\b|kotlin-kapt', updated):
+            has_compiler = ('hilt-compiler' in updated or re.search(r'hilt[._]compiler', updated))
+            if not has_compiler:
+                processor = 'ksp' if re.search(r'\bksp\b', updated) else 'kapt'
+                if processor == 'kapt' and not re.search(r'\bkapt\b|kotlin-kapt', updated):
                     if 'plugins {' in updated:
-                        kapt_plugin = '    id("org.jetbrains.kotlin.kapt")\\n'
-                        updated = updated.replace('plugins {', 'plugins {\\n' + kapt_plugin, 1)
+                        updated = updated.replace('plugins {', 'plugins {\n    id("org.jetbrains.kotlin.kapt")', 1)
                     elif 'plugins{' in updated:
-                        updated = updated.replace('plugins{', 'plugins{\\n    id("org.jetbrains.kotlin.kapt")', 1)
+                        updated = updated.replace('plugins{', 'plugins{\n    id("org.jetbrains.kotlin.kapt")', 1)
                 compiler_line = f'    {processor}("com.google.dagger:hilt-compiler:{hilt_version}")'
-                updated = updated.replace('dependencies {', 'dependencies {\\n' + compiler_line, 1)
-                changes.append(f'{path.relative_to(root)}: added missing Hilt compiler via {processor} ({hilt_version})')
+                if 'dependencies {' in updated:
+                    updated = updated.replace('dependencies {', 'dependencies {\n' + compiler_line, 1)
+                    changes.append(f'{path.relative_to(root)}: added missing Hilt compiler via {processor} ({hilt_version})')
     if updated != original:
         path.write_text(updated)
         changes.append(f'{path.relative_to(root)}: repaired Android build metadata')
