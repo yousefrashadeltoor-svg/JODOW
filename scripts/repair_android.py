@@ -208,6 +208,48 @@ for shortcuts in root.rglob('shortcuts.xml'):
         values_file.write_text('\n'.join(values) + '\n')
         changes.append(f'{shortcuts.relative_to(root)}: moved {len(generated)} shortcut labels into string resources')
 
+# Emit targeted source snippets for remaining compile failures; never modify UI while inspecting.
+diagnostic = []
+snippets = {
+    'AuroraGlassComponents.kt': [(1, 145)],
+    'DownloadRepository.kt': [(1, 42), (165, 205)],
+    'NetworkAndExtractors.kt': [(1, 105)],
+    'Glass.kt': [(245, 280)],
+    'BrowserScreen.kt': [(1, 45), (150, 175), (245, 280)],
+}
+for filename, ranges in snippets.items():
+    matches = [p for p in root.rglob(filename) if p.is_file() and 'build' not in p.parts]
+    for path in matches[:2]:
+        source_lines = path.read_text(errors='ignore').splitlines()
+        diagnostic.append(f'--- SOURCE {path.relative_to(root)} ---')
+        for first, last in ranges:
+            diagnostic.append(f'-- lines {first}-{last} --')
+            diagnostic.extend(f'{number}: {line}' for number, line in enumerate(source_lines, 1) if first <= number <= min(last, len(source_lines)))
+for symbol in ('SizeProbe', 'headerFor', 'ScreenHeader', 'hazeEffect', 'HazeStyle'):
+    occurrences = []
+    for path in root.rglob('*.kt'):
+        if any(part in ('.gradle', 'build') for part in path.parts):
+            continue
+        try:
+            for number, line in enumerate(path.read_text(errors='ignore').splitlines(), 1):
+                if symbol in line:
+                    occurrences.append(f'{path.relative_to(root)}:{number}: {line.strip()}')
+        except OSError:
+            pass
+    diagnostic.append(f'--- SYMBOL {symbol} ---')
+    diagnostic.extend(occurrences[:40] or ['NO MATCH'])
+for catalog in root.rglob('*.toml'):
+    if 'version' not in catalog.name.lower() and 'versions' not in catalog.name.lower():
+        continue
+    matches = [(i, line) for i, line in enumerate(catalog.read_text(errors='ignore').splitlines(), 1) if any(k in line.lower() for k in ('haze', 'composeunstyled', 'cronet', 'youtubedl', 'media3'))]
+    if matches:
+        diagnostic.append(f'--- CATALOG {catalog.relative_to(root)} ---')
+        diagnostic.extend(f'{i}: {line}' for i, line in matches[:100])
+if diagnostic:
+    changes.append('SOURCE DIAGNOSTICS START')
+    changes.extend(diagnostic)
+    changes.append('SOURCE DIAGNOSTICS END')
+
 report.parent.mkdir(parents=True, exist_ok=True)
 report.write_text('\n'.join(sorted(set(changes))) + ('\n' if changes else 'No known build repairs were needed.\n'))
 print(report.read_text())
