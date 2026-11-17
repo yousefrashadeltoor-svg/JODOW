@@ -151,9 +151,9 @@ jobs:
                   }
                   with open(report_path, "w") as f: json.dump(report, f, indent=2)
                   with open(output_path, "a") as f:
-                      f.write("ready=true\\n")
-                      f.write(f"android_root={root}\\n")
-                      f.write("modules=" + ",".join(modules) + "\\n")
+                      f.write("ready=true\n")
+                      f.write(f"android_root={root}\n")
+                      f.write("modules=" + ",".join(modules) + "\n")
                   print(json.dumps(report, indent=2))
                   raise SystemExit(0)
           report = {
@@ -164,7 +164,7 @@ jobs:
               "android_manifests": [str(p.relative_to(src)) for p in src.rglob("AndroidManifest.xml") if ".gradle" not in p.parts and "build" not in p.parts][:100]
           }
           with open(report_path, "w") as f: json.dump(report, f, indent=2)
-          with open(output_path, "a") as f: f.write("ready=false\\n")
+          with open(output_path, "a") as f: f.write("ready=false\n")
           print(json.dumps(report, indent=2))
           PY
 
@@ -288,11 +288,11 @@ jobs:
           with open("delivery/BUILD-STATUS.json", "w", encoding="utf-8") as f:
               json.dump(reports, f, ensure_ascii=False, indent=2)
           with open("delivery/README.txt", "w", encoding="utf-8") as f:
-              f.write("JODOW Android archive build package\\n")
-              f.write("APK files are included only when an actual native build produced them.\\n")
-              f.write("See BUILD-STATUS.json and Reports for build and validation status.\\n\\n")
+              f.write("JODOW Android archive build package\n")
+              f.write("APK files are included only when an actual native build produced them.\n")
+              f.write("See BUILD-STATUS.json and Reports for build and validation status.\n\n")
               for r in reports:
-                  f.write(f"{r.get('id')} — {r.get('label')}: {r.get('status')}\\n")
+                  f.write(f"{r.get('id')} — {r.get('label')}: {r.get('status')}\n")
           with zipfile.ZipFile("JODOW-Android-APKs-and-Reports.zip", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
               for root, _, files in os.walk("delivery"):
                   for name in files:
