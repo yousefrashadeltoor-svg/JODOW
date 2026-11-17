@@ -1,0 +1,76 @@
+name: Publish completed Android APKs
+
+on:
+  workflow_run:
+    workflows:
+      - JODOW Android archive audit and build
+    types:
+      - completed
+    branches:
+      - audit/android-build-matrix-2026-11-16
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-validated-apks:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build evidence from completed run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jodow-*-evidence
+          path: evidence
+          merge-multiple: false
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Select only fully validated APKs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, shutil
+          os.makedirs('release-assets', exist_ok=True)
+          selected = []
+          for report_path in sorted(glob.glob('evidence/**/report.json', recursive=True)):
+              with open(report_path, encoding='utf-8') as f:
+                  report = json.load(f)
+              count = int(report.get('apk_count', 0))
+              valid = int(report.get('apk_validated_count', 0))
+              if report.get('status') != 'BUILD_TESTS_AND_APK_VALIDATION_PASSED' or count < 1 or valid != count:
+                  continue
+              for apk in glob.glob(os.path.join(os.path.dirname(report_path), '*.apk')):
+                  app_id = report.get('id', 'unknown')
+                  target = f'release-assets/JODOW-App-{app_id}.apk'
+                  shutil.copy2(apk, target)
+                  selected.append(target)
+          print('Validated APKs selected for release:', len(selected))
+          for item in selected:
+              print(item, os.path.getsize(item))
+          PY
+
+      - name: Publish validated APK files as direct download assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          BUILD_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(release-assets/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo 'No APK passed build, unit-test, ZIP, signing and package-metadata validation.'
+            exit 0
+          fi
+          tag="jodow-android-build-${BUILD_RUN_NUMBER}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${apks[@]}" --clobber
+          else
+            gh release create "${tag}" "${apks[@]}" \
+              --title "JODOW Validated Android APKs — Build ${BUILD_RUN_NUMBER}" \
+              --notes "Only APKs whose Gradle assemble, unit tests, ZIP integrity, signature verification and Android package metadata checks all passed are included. Source: GitHub Actions run ${BUILD_RUN_ID}. No real-device runtime test is implied."
+          fi
