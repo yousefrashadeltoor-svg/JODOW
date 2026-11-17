@@ -146,82 +146,76 @@ jobs:
                       p.write_text("\n".join(x for x in lines if x is not None) + "\n")
           # Repair a small set of confirmed source defects without changing the original ZIP uploads.
           hilt_version = '2.57.1'
+          # Resolve actual versions for the two known missing artifacts from the version catalog.
           for toml in root.rglob('*.toml'):
-              txt = toml.read_text(errors='ignore')
-              for line in txt.splitlines():
-                  m = re.match(r'^\\s*(?:hilt|dagger-hilt)\\s*=\\s*[\"\\\']([^\"\\\']+)', line)
-                  if m and re.match(r'^\\d+\\.\\d+', m.group(1)):
-                      hilt_version = m.group(1)
-              # Update only the version aliases actually referenced by the affected modules.
-              module_versions = {
-                  'com.composables:composeunstyled': ('1.20.1', '1.49.1'),
-                  'androidx.media3:media3-ui-compose': ('1.5.1', '1.6.0'),
-              }
-              sections = []
+              original = toml.read_text(errors='ignore')
+              text = original
+              lines = text.splitlines()
               current_section = ''
-              for line in txt.splitlines():
+              refs = {}
+              for line in lines:
                   stripped = line.strip()
                   if stripped.startswith('[') and stripped.endswith(']'):
                       current_section = stripped
-                  if current_section != '[libraries]':
                       continue
-                  alias_match = re.match(r'^\\s*([A-Za-z0-9_-]+)\\s*=\\s*\\{(.*)\\}', line)
-                  if not alias_match:
-                      continue
-                  body = alias_match.group(2)
-                  for module_name, (old_version, new_version) in module_versions.items():
-                      if module_name not in body:
-                          continue
-                      ref_match = re.search(r'version\\.ref\\s*=\\s*[\"\\\']([^\"\\\']+)', body)
-                      if ref_match:
-                          sections.append((ref_match.group(1), old_version, new_version))
-                      else:
-                          direct = re.sub(r'(?<=version\\s*=\\s*[\"\\\'])' + re.escape(old_version), new_version, line)
-                          if direct != line:
-                              txt = txt.replace(line, direct)
-                              repairs.append(f'{toml.relative_to(root)}: updated {module_name} from {old_version} to {new_version}')
-              if sections:
-                  version_lines = []
-                  section = ''
-                  for line in txt.splitlines():
-                      stripped = line.strip()
-                      if stripped.startswith('[') and stripped.endswith(']'):
-                          section = stripped
-                      if section == '[versions]':
-                          km = re.match(r'^\\s*([A-Za-z0-9_-]+)\\s*=\\s*[\"\\\']([^\"\\\']+)', line)
-                          if km:
-                              for alias, old_version, new_version in sections:
-                                  if km.group(1) == alias and km.group(2) == old_version:
-                                      line = line.replace(old_version, new_version, 1)
-                                      repairs.append(f'{toml.relative_to(root)}: updated {alias} version {old_version} to {new_version}')
-                      version_lines.append(line)
-                  txt = '\\n'.join(version_lines) + '\\n'
-              if txt != toml.read_text(errors='ignore'):
-                  toml.write_text(txt)
-          # Fix known malformed dependency/accessor declarations in Gradle scripts.
+                  if current_section == '[versions]' and '=' in line:
+                      key, value = line.split('=', 1)
+                      if key.strip() in ('hilt', 'hilt-version', 'dagger-hilt') and '"' in value:
+                          hilt_version = value.split('"')[1]
+                  if current_section == '[libraries]' and 'version.ref' in line:
+                      for module_name in ('com.composables:composeunstyled', 'androidx.media3:media3-ui-compose'):
+                          if module_name in line:
+                              m = re.search(r'version\.ref\s*=\s*"([^"]+)"', line)
+                              if m:
+                                  refs[module_name] = m.group(1)
+              output_lines = []
+              current_section = ''
+              for line in lines:
+                  stripped = line.strip()
+                  if stripped.startswith('[') and stripped.endswith(']'):
+                      current_section = stripped
+                  if current_section == '[versions]' and '=' in line:
+                      key, value = line.split('=', 1)
+                      alias = key.strip()
+                      value_text = value.strip()
+                      for module_name, old_version, new_version in (
+                          ('com.composables:composeunstyled', '1.20.1', '1.49.1'),
+                          ('androidx.media3:media3-ui-compose', '1.5.1', '1.6.0'),
+                      ):
+                          if refs.get(module_name) == alias and f'"{old_version}"' in value_text:
+                              line = line.replace(f'"{old_version}"', f'"{new_version}"', 1)
+                              repairs.append(f'{toml.relative_to(root)}: updated {alias} to {new_version}')
+                  output_lines.append(line)
+              text = '\n'.join(output_lines) + '\n'
+              text = text.replace('com.composables:composeunstyled:1.20.1', 'com.composables:composeunstyled:1.49.1')
+              text = text.replace('androidx.media3:media3-ui-compose:1.5.1', 'androidx.media3:media3-ui-compose:1.6.0')
+              if text != original:
+                  toml.write_text(text)
+          # Repair known Gradle-source issues in the extracted copy only.
           for gradle_file in list(root.rglob('build.gradle')) + list(root.rglob('build.gradle.kts')):
               if any(part in ('.gradle', 'build') for part in gradle_file.parts):
                   continue
-              old = gradle_file.read_text(errors='ignore')
-              new = old.replace('libs.androidx.compose.ui.googlefonts.let { libs.androidx.compose.ui.text.googlefonts }', 'libs.androidx.compose.ui.text.googlefonts')
-              new = new.replace('androidx.media3:media3-ui-compose:1.5.1', 'androidx.media3:media3-ui-compose:1.6.0')
-              new = new.replace('com.composables:composeunstyled:1.20.1', 'com.composables:composeunstyled:1.49.1')
-              # Hilt's Gradle plugin requires the runtime artifact in the Android application module.
+              original = gradle_file.read_text(errors='ignore')
+              text = original
+              text = text.replace('libs.androidx.compose.ui.googlefonts.let { libs.androidx.compose.ui.text.googlefonts }', 'libs.androidx.compose.ui.text.googlefonts')
+              text = text.replace('androidx.media3:media3-ui-compose:1.5.1', 'androidx.media3:media3-ui-compose:1.6.0')
+              text = text.replace('com.composables:composeunstyled:1.20.1', 'com.composables:composeunstyled:1.49.1')
               manifest = gradle_file.parent / 'src/main/AndroidManifest.xml'
-              has_hilt_plugin = ('com.google.dagger.hilt.android' in new or re.search(r'libs\\.plugins(?:\\.[A-Za-z0-9_]+)*\\.hilt', new))
-              if manifest.is_file() and has_hilt_plugin and 'hilt-android' not in new:
-                  dependency = f'    implementation("com.google.dagger:hilt-android:{hilt_version}")\\n'
-                  new, count = re.subn(r'(?m)^(\\s*dependencies\\s*\\{\\s*)', lambda m: m.group(1) + '\\n' + dependency, new, count=1)
-                  if count:
+              has_hilt_plugin = ('com.google.dagger.hilt.android' in text or 'libs.plugins.hilt' in text)
+              if manifest.is_file() and has_hilt_plugin and 'hilt-android' not in text:
+                  dependency_line = f'    implementation("com.google.dagger:hilt-android:{hilt_version}")'
+                  match = re.search(r'(?m)^\s*dependencies\s*\{', text)
+                  if match:
+                      text = text[:match.end()] + '\n' + dependency_line + text[match.end():]
                       repairs.append(f'{gradle_file.relative_to(root)}: added missing Hilt Android runtime dependency {hilt_version}')
-              if new != old:
-                  gradle_file.write_text(new)
-                  if 'googlefonts' in old and 'googlefonts' not in new:
-                      repairs.append(f'{gradle_file.relative_to(root)}: fixed Compose Google Fonts accessor')
-                  if 'media3-ui-compose:1.5.1' in old:
-                      repairs.append(f'{gradle_file.relative_to(root)}: updated Media3 Compose UI to 1.6.0')
-                  if 'composeunstyled:1.20.1' in old:
-                      repairs.append(f'{gradle_file.relative_to(root)}: updated Compose Unstyled to 1.49.1')
+              if text != original:
+                  gradle_file.write_text(text)
+                  if original != text and 'libs.androidx.compose.ui.googlefonts.let' in original:
+                      repairs.append(f'{gradle_file.relative_to(root)}: corrected Compose Google Fonts accessor')
+                  if 'androidx.media3:media3-ui-compose:1.5.1' in original:
+                      repairs.append(f'{gradle_file.relative_to(root)}: corrected Media3 Compose UI dependency version')
+                  if 'com.composables:composeunstyled:1.20.1' in original:
+                      repairs.append(f'{gradle_file.relative_to(root)}: corrected Compose Unstyled dependency version')
           log_path.write_text("\n".join(repairs) + ("\n" if repairs else "No metadata repairs were necessary.\n"))
           print(log_path.read_text())
           PY
