@@ -216,45 +216,101 @@ jobs:
                       repairs.append(f'{gradle_file.relative_to(root)}: corrected Media3 Compose UI dependency version')
                   if 'com.composables:composeunstyled:1.20.1' in original:
                       repairs.append(f'{gradle_file.relative_to(root)}: corrected Compose Unstyled dependency version')
-          # Replace dependency versions that do not exist in Maven Central/Google Maven.
-          version_fixes = {
+          # Apply confirmed dependency coordinate and version corrections.
+          replacements = [
+              ('com.composables:composeunstyled:1.20.1', 'com.composables:composeunstyled:1.49.9'),
+              ('com.composables:composeunstyled:1.20.0', 'com.composables:composeunstyled:1.49.9'),
+              ('com.composables:core:1.19.3', 'com.composables:core:1.49.9'),
+              ('com.google.android.gms:play-services-cronet:119.6045.31', 'com.google.android.gms:play-services-cronet:18.1.1'),
+              ('org.chromium.net:cronet-okhttp:131.0.6778.108', 'com.google.net.cronet:cronet-okhttp:0.1.1'),
+          ]
+          catalog_versions = {
               'com.composables:composeunstyled': '1.49.9',
               'com.composables:core': '1.49.9',
               'com.google.android.gms:play-services-cronet': '18.1.1',
               'com.google.net.cronet:cronet-okhttp': '0.1.1',
           }
-          coordinate_fixes = {
-              'org.chromium.net:cronet-okhttp': 'com.google.net.cronet:cronet-okhttp',
-          }
           for p in root.rglob('*'):
-              if not p.is_file() or any(x in p.parts for x in ('.gradle', 'build')):
+              if not p.is_file() or any(part in ('.gradle', 'build') for part in p.parts):
                   continue
               if p.suffix not in ('.toml', '.gradle', '.kts', '.properties'):
                   continue
               original = p.read_text(errors='ignore')
               updated = original
-              # Correct complete coordinates when the version is hard-coded in a Gradle script.
-              for old, new in (
-                  ('com.composables:composeunstyled:1.20.1', 'com.composables:composeunstyled:1.49.9'),
-                  ('com.composables:composeunstyled:1.20.0', 'com.composables:composeunstyled:1.49.9'),
-                  ('com.composables:core:1.19.3', 'com.composables:core:1.49.9'),
-                  ('com.google.android.gms:play-services-cronet:119.6045.31', 'com.google.android.gms:play-services-cronet:18.1.1'),
-                  ('org.chromium.net:cronet-okhttp:131.0.6778.108', 'com.google.net.cronet:cronet-okhttp:0.1.1'),
-              ):
+              for old, new in replacements:
                   updated = updated.replace(old, new)
               if p.suffix == '.toml':
-                  catalog_lines = updated.splitlines()
+                  lines = updated.splitlines()
                   section = ''
-                  alias_versions = {}
-                  # Rewrite module coordinates and record any version.ref alias that must move with it.
-                  for index, line in enumerate(catalog_lines):
+                  aliases = {}
+                  for line in lines:
                       stripped = line.strip()
                       if stripped.startswith('[') and stripped.endswith(']'):
                           section = stripped
                           continue
-                      if section != '[libraries]':
+                      if section != '[libraries]' or 'module = ' not in line:
                           continue
-                      alias_match = re.match(r'^\s*([A-Za-z0-9_.-]+)\s*=\s*\{(.*)\}\s*
+                      module_part = line.split('module = ', 1)[1]
+                      if not module_part.startswith('"'):
+                          continue
+                      module = module_part.split('"', 2)[1]
+                      if module not in catalog_versions:
+                          continue
+                      if 'version.ref = ' in line:
+                          ref_part = line.split('version.ref = ', 1)[1]
+                          if ref_part.startswith('"'):
+                              aliases[ref_part.split('"', 2)[1]] = catalog_versions[module]
+                      elif 'version = ' in line:
+                          before, after = line.split('version = ', 1)
+                          if after.startswith('"'):
+                              old_value = after.split('"', 2)[1]
+                              updated = updated.replace('version = "' + old_value + '"', 'version = "' + catalog_versions[module] + '"', 1)
+                  if aliases:
+                      lines = updated.splitlines()
+                      section = ''
+                      new_lines = []
+                      for line in lines:
+                          stripped = line.strip()
+                          if stripped.startswith('[') and stripped.endswith(']'):
+                              section = stripped
+                          if section == '[versions]' and ' = ' in line:
+                              key = line.split(' = ', 1)[0].strip()
+                              if key in aliases and '"' in line:
+                                  line = key + ' = "' + aliases[key] + '"'
+                                  repairs.append(f'{p.relative_to(root)}: updated catalog version {key} to {aliases[key]}')
+                          new_lines.append(line)
+                      updated = '\n'.join(new_lines) + ('\n' if updated.endswith('\n') else '')
+              if updated != original:
+                  p.write_text(updated)
+                  repairs.append(f'{p.relative_to(root)}: applied verified dependency fixes')
+          # Android shortcut label attributes require string-resource references.
+          import html
+          label_pattern = re.compile(r'((?:android:)?shortcut(?:Short|Long)Label\s*=\s*")([^"]+)(")')
+          for shortcuts in root.rglob('shortcuts.xml'):
+              if any(part in ('.gradle', 'build') for part in shortcuts.parts):
+                  continue
+              xml = shortcuts.read_text(errors='ignore')
+              generated = []
+              def replace_label(match):
+                  value = match.group(2)
+                  if value.startswith('@') or value.startswith('?'):
+                      return match.group(0)
+                  name = 'buildfix_shortcut_label_' + str(len(generated) + 1)
+                  generated.append((name, value))
+                  return match.group(1) + '@string/' + name + match.group(3)
+              fixed_xml = label_pattern.sub(replace_label, xml)
+              if generated:
+                  shortcuts.write_text(fixed_xml)
+                  values_dir = shortcuts.parent.parent / 'values'
+                  values_dir.mkdir(parents=True, exist_ok=True)
+                  values_file = values_dir / 'buildfix_shortcut_labels.xml'
+                  value_lines = ['<?xml version="1.0" encoding="utf-8"?>', '<resources>']
+                  for name, value in generated:
+                      value_lines.append('    <string name="' + name + '">' + html.escape(value) + '</string>')
+                  value_lines.append('</resources>')
+                  values_file.write_text('\n'.join(value_lines) + '\n')
+                  repairs.append(f'{shortcuts.relative_to(root)}: replaced {len(generated)} inline shortcut labels with string resources')
+          log_path.write_text("\n".join(repairs) + ("\n" if repairs else "No metadata repairs were necessary.\n"))
           print(log_path.read_text())
           PY
 
