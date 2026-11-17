@@ -233,6 +233,22 @@ for source_file in root.rglob('*.kt'):
             'style.copy(brush = brush, color = c.textPrimary)',
             'style.copy(brush = brush)'
         )
+    elif 'hazeChild(' in updated and re.search(r'\bshape\s*=\s*shape', updated) and 'HazeStyle(' in updated:
+        # The current Haze API accepts shape through Compose clipping, not as a hazeChild argument.
+        updated = re.sub(
+            r'Modifier\.hazeChild\(\s*state\s*=\s*hazeState,\s*shape\s*=\s*shape,\s*style\s*=\s*HazeStyle\(',
+            'Modifier.clip(shape).hazeChild(\n            state = hazeState,\n            style = HazeStyle(\n                tints = emptyList(),',
+            updated,
+            count=1
+        )
+        if 'import androidx.compose.ui.draw.clip' not in updated:
+            updated = updated.replace(
+                'import androidx.compose.ui.Modifier',
+                'import androidx.compose.ui.Modifier\nimport androidx.compose.ui.draw.clip',
+                1
+            )
+        changes.append(f'{source_file.relative_to(root)}: migrated Haze child shape to Compose clip and disambiguated HazeStyle')
+
     if updated != original:
         source_file.write_text(updated)
         changes.append(f'{source_file.relative_to(root)}: repaired confirmed Compose/download/browser API mismatches')
@@ -290,6 +306,9 @@ for gradle_root in gradle_roots[:3]:
                 diagnostic.extend(f'{i}: {line}' for i, line in enumerate(build_file.read_text(errors='ignore').splitlines(), 1) if i <= 180)
 
 snippets = {
+    'AuroraResult.kt': [(1, 90)],
+    'PlayerScreen.kt': [(1, 80), (180, 235)],
+    'AuroraGlassComponents.kt': [(85, 115)],
     'AuroraGlassComponents.kt': [(1, 145)],
     'DownloadRepository.kt': [(1, 45), (165, 215)],
     'NetworkAndExtractors.kt': [(1, 115)],
