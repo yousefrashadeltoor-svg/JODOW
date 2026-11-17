@@ -153,6 +153,14 @@ for path in root.rglob('*.kt'):
         path.write_text(updated)
         changes.append(f'{path.relative_to(root)}: corrected Cronet OkHttp import package')
 
+for path in root.rglob('*.xml'):
+    if any(part in ('.gradle', 'build') for part in path.parts):
+        continue
+    original = path.read_text(errors='ignore')
+    updated = original.replace('android:postSplashScreenTheme', 'postSplashScreenTheme')
+    if updated != original:
+        path.write_text(updated)
+        changes.append(f'{path.relative_to(root)}: corrected AndroidX SplashScreen postSplashScreenTheme namespace')
 label_pattern = re.compile(r'((?:android:)?shortcut(?:Short|Long)Label\s*=\s*")([^"]+)(")')
 for shortcuts in root.rglob('shortcuts.xml'):
     if any(part in ('.gradle', 'build') for part in shortcuts.parts):
