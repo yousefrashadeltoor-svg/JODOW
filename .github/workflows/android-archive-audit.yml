@@ -101,11 +101,6 @@ jobs:
                   z.extract(item, dest)
           PY
 
-      - name: Repair known malformed Gradle metadata in extracted copy
-        shell: bash
-        env:
-          APP_ID: "${{ matrix.id }}"
-        run: |
           python3 - "work/${APP_ID}/source" "work/${APP_ID}/out/repairs.txt" <<'PY'
           import pathlib, re, sys
           root = pathlib.Path(sys.argv[1])
